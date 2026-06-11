@@ -11,6 +11,8 @@ from django.contrib.auth.models import (
     BaseUserManager,
     PermissionsMixin,
 )
+from django.contrib.auth.password_validation import validate_password
+from django.core.validators import RegexValidator
 
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -46,10 +48,26 @@ class UserManager(BaseUserManager):
         return user
 
 class User(AbstractBaseUser, PermissionsMixin):
-    """User in the system."""
+    """Custom User class in the system."""
+    class Meta:
+        ordering = ["email"]
+        
     first_name = models.CharField(max_length=255, blank=True, null=True)
     last_name = models.CharField(max_length=255, blank=True, null=True)
     email = models.EmailField(max_length=255, unique=True)
+    username = models.CharField(
+        max_length=255,
+        unique=True,
+        blank=True,
+        null=True,
+        validators=[
+            RegexValidator(
+                regex=r"^\S+$",  # No whitespace allowed
+                message="Username cannot contain spaces",
+                code="invalid_username",
+            )
+        ],
+    )
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
@@ -60,18 +78,21 @@ class User(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 
+    def set_password(self, raw_password):
+        """Validates raw password before hashing"""
+        if not raw_password:
+            raise ValidationError("Password is required.")
+        
+        validate_password(raw_password, user=self)
+        
+        super().set_password(raw_password)
+
     def save(self, *args, **kwargs):
         if not self.pk and not self.slug:
-            f_name = self.first_name if self.first_name else ''
-            l_name = self.last_name if self.last_name else ''
-            if f_name or l_name:
-                 full_name = f'{f_name} {l_name}'
-            else:
-                 full_name = self.email.split('@')[0]
-            base_slug = slugify(full_name)
-
+            base_slug = slugify(self.email.split('@')[0])
+            
             if not base_slug:
-                base_slug = slugify(self.email.split('@')[0]) or 'user'
+                base_slug = 'user'
 
             new_slug = base_slug
             counter = 1

@@ -51,11 +51,13 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'core_db',
+    'corsheaders',
     'rest_framework',
     'drf_spectacular',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -111,9 +113,9 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
     },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
+    # {
+    #     'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+    # },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
     },
@@ -160,4 +162,37 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
 }
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Core DB Authentication API',
+    'DESCRIPTION': 'Handling login, logout, and token workflows.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    
+    'SECURITY': [
+        {
+            'jwtAuth': [],
+        }
+    ],
+}
+
+CORS_ALLOW_ALL_ORIGINS = False
+if DEBUG:
+    # Allow localhost and local IP so we can test via Swagger smoothly.
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
+else:
+    CORS_ALLOWED_ORIGINS = [
+        "https://www.my-official-frontend.com",
+        "https://my-official-frontend.com",
+    ]
+
+# Crucial for Swagger: Allows Swagger UI to send the authentication cookies/headers
+CORS_ALLOW_CREDENTIALS = True
