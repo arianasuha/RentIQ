@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Genre, Book, ReviewPost, Reaction, Comment
+from .models import User
 
 # --- CUSTOM USER ADMIN ---
 @admin.register(User)
@@ -25,40 +25,3 @@ class UserAdmin(BaseUserAdmin):
         }),
     )
     search_fields = ('email', 'first_name', 'last_name')
-
-
-# --- GENRE ADMIN WITH APPROVAL ACTION ---
-@admin.register(Genre)
-class GenreAdmin(admin.ModelAdmin):
-    list_display = ('name', 'is_approved', 'slug')
-    list_filter = ('is_approved',)
-    search_fields = ('name',)
-    actions = ['approve_genres']
-
-    def approve_genres(self, request, queryset):
-        queryset.update(is_approved=True)
-    approve_genres.short_description = "Approve selected genres"
-
-
-# --- BOOK ADMIN ---
-@admin.register(Book)
-class BookAdmin(admin.ModelAdmin):
-    list_display = ('title', 'author', 'slug')
-    search_fields = ('title', 'author')
-    # Helps you filter books by genre quickly
-    list_filter = ('genres',)
-
-
-# --- REVIEW POST ADMIN ---
-@admin.register(ReviewPost)
-class ReviewPostAdmin(admin.ModelAdmin):
-    list_display = ('review_title', 'book', 'reviewer', 'rating', 'review_date')
-    list_filter = ('rating', 'review_date')
-    # Use double underscore (__) to search fields in related models
-    search_fields = ('review_title', 'book__title', 'reviewer__email')
-    readonly_fields = ('slug', 'review_date')
-
-
-# --- SIMPLE REGISTRATIONS FOR INTERACTIONS ---
-admin.site.register(Reaction)
-admin.site.register(Comment)

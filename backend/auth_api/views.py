@@ -1,15 +1,23 @@
 from rest_framework import viewsets, status
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.core.cache import cache
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
+from django.utils import timezone
 from django.db.models import Q
 from drf_spectacular.utils import (
     extend_schema,
     OpenApiExample,
     OpenApiResponse,
 )
+from datetime import timedelta
 from backend.mixins import http_method_mixin
 from backend.schema_serializers import (
+    LoginRequestSerializer,
+    LoginResponseSerializer,
     ErrorResponseSerializer, 
     UserCreateRequestSerializer,
     UserUpdateRequestSerializer
@@ -19,9 +27,26 @@ from .serializers import (
     UserListSerializer, 
     UserRetrieveSerializer
 )
+from .paginations import UserPagination
 
 
 User = get_user_model()
+DUMMY_PASSWORD_HASH = make_password("dummy_password")
+
+def get_user_role(user):
+    """Get user role."""
+
+    if not user.is_active:
+        return "UnAuthorized"
+        
+    if user.is_superuser:
+        return "Superuser"
+        
+    if user.is_staff:
+        return "Admin"
+        
+    return "Default"
+
 
 def check_create_request_data(request):
     """Check if create request data is valid."""
@@ -112,8 +137,193 @@ def check_update_request_data(user_instance, request):
 
     return current_user
 
+class RefreshTokenView(APIView):
+    pass
+
+
+@extend_schema(
+    summary="User Login and Token Acquisition",
+    description=(
+        "Authenticates the user with email and password. "
+        "If valid, an access token and refresh token are returned."
+    ),
+    tags=["Authentication"],
+    request=LoginRequestSerializer,
+    responses={
+        status.HTTP_200_OK: OpenApiResponse(
+            response=LoginResponseSerializer,
+            description="Successful authentication. Returns JWT tokens and user metadata.",
+        ),
+        status.HTTP_400_BAD_REQUEST: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description=(
+                "Bad Request. Occurs on invalid credentials, deactivated account, "
+                "missing email/password, or other pre-auth failures."
+            ),
+        ),
+        status.HTTP_500_INTERNAL_SERVER_ERROR: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description="Internal Server Error.",
+        ),
+    },
+    examples=[
+        OpenApiExample(
+            name="Successful Login",
+            response_only=True,
+            status_codes=["200"],
+            value={
+                "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.A-VERY-LONG-JWT-TOKEN-PART-1",
+                "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUz1NiJ9.A-VERY-LONG-JWT-TOKEN-PART-2",
+                "user_id": 101,
+                "user_role": "Agent",
+                "access_token_expiry": "2023-06-15T12:34:56.789Z",
+            },
+        ),
+        OpenApiExample(
+            name="Superuser Login Request Example",
+            value={
+                "email": "superuser@example.com",
+                "password": "Django@123",
+            },
+        ),
+        OpenApiExample(
+            name="Staff Login Request Example",
+            value={
+                "email": "staffuser@example.com",
+                "password": "Django@123",
+            },
+        ),
+        OpenApiExample(
+            name="Agent Login Request Example",
+            value={
+                "email": "agentuser@example.com",
+                "password": "Django@123",
+            },
+        ),
+        OpenApiExample(
+            name="Default User Login Request Example",
+            value={
+                "email": "defaultuser@example.com",
+                "password": "Django@123",
+            },
+        ),
+        OpenApiExample(
+            name="Invalid Credentials Error",
+            response_only=True,
+            status_codes=["400"],
+            value={"error": "Invalid credentials"},
+        ),
+        OpenApiExample(
+            name="Deactivated Account Error",
+            response_only=True,
+            status_codes=["400"],
+            value={"error": "Account is deactivated. Contact your admin"},
+        ),
+        OpenApiExample(
+            name="Missing Email/Password Error",
+            response_only=True,
+            status_codes=["400"],
+            value={"error": "Email and password are required"},
+        ),
+    ],
+)
+
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        email = request.data.get("email")
+        password = request.data.get("password")
+
+        if not email or not password:
+            return Response(
+                {"detail": "Email and password are required."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            target_user = User.objects.get(email=email)
+            user_exists = True
+        except User.DoesNotExist:
+            target_user = None
+            user_exists = False
+
+        if user_exists:
+            is_password_correct = target_user.check_password(password)
+            is_active = target_user.is_active
+        else:
+            User().check_password(password) 
+            is_password_correct = False
+            is_active = True
+
+        if not is_active:
+            return Response(
+                {"detail": "This account is deactivated. Please contact the administrator to reactivate your account."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        cache_key = f"failed_attempts_{email}"
+
+        if not is_password_correct:
+            failed_attempts = cache.get(cache_key, 0) + 1
+            cache.set(cache_key, failed_attempts, timeout=86400)
+
+            if failed_attempts >= 5:
+                if target_user:
+                    target_user.is_active = False
+                    target_user.save() 
+                    cache.delete(cache_key)
+                    
+                    return Response(
+                        {"detail": "This account has been deactivated due to too many failed login attempts. Please contact the administrator to reactivate your account."},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+            if failed_attempts >= 3 and failed_attempts < 5:
+                remaining = 5 - failed_attempts
+                return Response(
+                    {"detail": f"Warning: Invalid credentials. You have {remaining} attempts left before your account is deactivated."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            return Response(
+                {"detail": "Invalid credentials. Please try again."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        cache.delete(cache_key)
+
+        try:
+            refresh = RefreshToken.for_user(target_user)
+            user_role = get_user_role(target_user)
+
+            response_data = {
+                "access_token": str(refresh.access_token),
+                "refresh_token": str(refresh),
+                "user_id": target_user.pk,
+                "user_role": user_role,
+                "access_token_expiry": timezone.now() + refresh.access_token.lifetime 
+            }
+            
+            response_serializer = LoginResponseSerializer(response_data)
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class LogoutView(APIView):
+    """Logout by blacklisting the refresh token"""
+    pass
+
+
+
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
+    pagination_class = UserPagination
     http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
 
     def get_serializer_class(self):
@@ -263,15 +473,33 @@ class UserViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
-    
+    @extend_schema(
+        summary="List All Users",
+        description=(
+            "Returns a paginated list of all user accounts. "
+            "Access is restricted to staff/superusers.",
+        ),
+        tags=["User Management"],
+        request=None,
+        responses={
+            status.HTTP_200_OK: UserListSerializer,
+            status.HTTP_401_UNAUTHORIZED: ErrorResponseSerializer,
+            status.HTTP_403_FORBIDDEN: OpenApiResponse(
+                response=ErrorResponseSerializer,
+                description="Forbidden. User does not have staff or superuser privileges.",
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                name="Forbidden Access",
+                response_only=True,
+                status_codes=["403"],
+                value={"error": "You do not have permission to perform this action."},
+            ),
+        ],
+    )
     def list(self, request, *args, **kwargs):
-        queryset = self.get_queryset()
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return super().list(request, *args, **kwargs)
 
     @extend_schema(
         summary="Retrieve Single User Details",

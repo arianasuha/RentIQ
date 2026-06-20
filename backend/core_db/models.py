@@ -3,7 +3,6 @@ Database models.
 """
 from django.db import models
 from django.utils.text import slugify
-from django.core.validators import MaxValueValidator, MinValueValidator
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
 from django.contrib.auth.models import (
@@ -13,6 +12,7 @@ from django.contrib.auth.models import (
 )
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import RegexValidator
+
 
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -25,7 +25,7 @@ class UserManager(BaseUserManager):
         except ValidationError:
             raise ValueError('The provided email is not a valid format.')
 
-        user = self.model(email=self.normalize_email(email), **extra_fields)
+        user = self.model(email=self.normalize_email(email).lower(), **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
 
@@ -56,14 +56,14 @@ class User(AbstractBaseUser, PermissionsMixin):
     last_name = models.CharField(max_length=255, blank=True, null=True)
     email = models.EmailField(max_length=255, unique=True)
     username = models.CharField(
-        max_length=255,
+        max_length=150,
         unique=True,
         blank=True,
         null=True,
         validators=[
             RegexValidator(
-                regex=r"^\S+$",  # No whitespace allowed
-                message="Username cannot contain spaces",
+                regex=r"^[a-zA-Z0-9_-]+$",
+                message="Username can only contain letters, numbers, underscores, and hyphens.",
                 code="invalid_username",
             )
         ],
@@ -71,6 +71,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=False)
+    trust_score = models.IntegerField(default=0)
     image_url = models.ImageField(upload_to='user_images/', blank=True, null=True)
     slug = models.SlugField(max_length=255, unique=True, blank=True)
 
@@ -101,130 +103,10 @@ class User(AbstractBaseUser, PermissionsMixin):
                 counter += 1
 
             self.slug = new_slug
-
+            
+        self.full_clean()
         super().save(*args, **kwargs)
 
     def __str__(self):
         """String representation of the user object."""
         return self.email
-
-
-class Genre(models.Model):
-    name = models.CharField(max_length=50, unique=True)
-    slug = models.SlugField(unique=True, max_length=50, blank=True)
-    is_approved = models.BooleanField(default=False)
-
-    def save(self, *args, **kwargs):
-        if self.slug != slugify(self.name):
-            self.name = self.name.strip().title()
-            self.slug = slugify(self.name)
-
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return self.name if self.is_approved else f"{self.name} (Pending)"
-
-    class Meta:
-        ordering = ['name']
-
-class Book(models.Model):
-    title = models.CharField(max_length=255)
-    author = models.CharField(max_length=150)
-    slug = models.SlugField(unique=True, max_length=255, blank=True)
-
-    genres = models.ManyToManyField(
-        'Genre',
-        related_name='books',
-        blank=True
-    )
-
-    class Meta:
-        unique_together = ('title', 'author')
-
-    def save(self, *args, **kwargs):
-        if not self.slug:
-            base_slug = slugify(f'{self.title} {self.author}')
-
-            new_slug = base_slug
-            counter = 1
-            while Book.objects.filter(slug=new_slug).exists():
-                new_slug = f'{base_slug}-{counter}'
-                counter += 1
-
-            self.slug = new_slug
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return f'{self.title} by {self.author}'
-
-
-class ReviewPost(models.Model):
-    reviewer = models.ForeignKey('User',on_delete=models.CASCADE)
-    review_title = models.CharField(max_length=150, blank=True, null=True)
-    book = models.ForeignKey('Book', on_delete=models.CASCADE, related_name='reviews')
-    review_image = models.ImageField(
-        upload_to='review_images/',
-        blank=True,
-        null=True,
-    )
-    review_content = models.TextField()
-    rating = models.IntegerField(
-        validators=[MinValueValidator(1), MaxValueValidator(5)],
-        help_text='Rating must be between 1 and 5 stars.'
-    )
-    review_date = models.DateTimeField(auto_now_add=True)
-    slug = models.SlugField(unique=True, max_length=255, blank=True)
-
-    def save(self, *args, **kwargs):
-        if not self.slug:
-            # 1. Fallback logic: Use review_title OR book.title
-            title_to_slugify = self.review_title if self.review_title else f"Review of {self.book.title}"
-
-            base_slug = slugify(title_to_slugify)
-            unique_slug_base = f'{base_slug}-by-{self.reviewer.slug}'
-
-            # 2. Collision detection
-            final_slug = unique_slug_base
-            counter = 1
-            while ReviewPost.objects.filter(slug=final_slug).exists():
-                final_slug = f'{unique_slug_base}-{counter}'
-                counter += 1
-
-            self.slug = final_slug
-
-        super().save(*args, **kwargs)
-
-    class Meta:
-        ordering = ['-review_date']
-        constraints = [
-            models.UniqueConstraint(
-                fields=['reviewer', 'book'],
-                name='unique_review_per_user_per_book'
-            )
-        ]
-
-
-
-class Reaction(models.Model):
-    class ReactionTypes(models.TextChoices):
-        LOVE = 'LOVE', 'Love'
-        LIKE = 'LIKE', 'Like'
-
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    review_post = models.ForeignKey(ReviewPost, on_delete=models.CASCADE, related_name='reactions')
-    reaction_type = models.CharField(max_length=7, choices=ReactionTypes.choices)
-
-    class Meta:
-        # Crucial for APIs: prevents duplicate likes
-        constraints = [
-            models.UniqueConstraint(fields=['user', 'review_post'], name='unique_user_reaction')
-        ]
-
-class Comment(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    review_post = models.ForeignKey(ReviewPost, on_delete=models.CASCADE, related_name='comments')
-    content = models.TextField()
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['-created_at']
