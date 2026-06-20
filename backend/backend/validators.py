@@ -6,26 +6,16 @@ class PasswordComplexityValidator:
         if len(password) < 8:
             errors.append("Password must contain at least eight characters.")
 
-        has_lower = False
-        has_upper = False
-        has_digit = False
-        has_special = False
+        has_upper = any(char.isupper() for char in password)
+        has_lower = any(char.islower() for char in password)
+        has_digit = any(char.isdigit() for char in password)
 
-        for char in password:
-            ascii_val = ord(char)
-            if 65 <= ascii_val <= 90:
-                has_upper = True
-            elif 97 <= ascii_val <= 122:
-                has_lower = True
-            elif 48 <= ascii_val <= 57:
-                has_digit = True
-            elif 33 <= ascii_val <= 47 or 58 <= ascii_val <= 64 or 91 <= ascii_val <= 96 or 123 <= ascii_val <= 127:
-                has_special = True
+        has_special = any(not char.isalnum() for char in password)
 
         if not has_upper:
-            errors.append("Password must contain at least one upper character.")
+            errors.append("Password must contain at least one uppercase character.")
         if not has_lower:
-            errors.append("Password must contain at least one lower character.")
+            errors.append("Password must contain at least one lowercase character.")
         if not has_digit:
             errors.append("Password must contain at least one digit.")
         if not has_special:
