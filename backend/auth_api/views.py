@@ -6,7 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from django.core.cache import cache
 from django.contrib.auth import get_user_model
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password, make_password
 from django.utils import timezone
 from django.db.models import Q
 from drf_spectacular.utils import (
@@ -164,7 +164,7 @@ class RefreshTokenView(APIView):
                 )
             
             target_user = User.objects.get(id=user_id)
-            
+
             user_role = get_user_role(target_user)
             
             if not target_user.is_active:
@@ -316,7 +316,7 @@ class LoginView(APIView):
             is_password_correct = target_user.check_password(password)
             is_active = target_user.is_active
         else:
-            User().check_password(password) 
+            check_password(password, DUMMY_PASSWORD_HASH) 
             is_password_correct = False
             is_active = True
 
@@ -380,7 +380,28 @@ class LoginView(APIView):
 
 class LogoutView(APIView):
     """Logout by blacklisting the refresh token"""
-    pass
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            refresh_token = request.data.get("refresh_token")
+
+            if not refresh_token:
+                return Response(
+                    {"detail": "Refresh token is required."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+
+            return Response(
+                {"success": "Logout successful."}, status=status.HTTP_200_OK
+            )
+        
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 
