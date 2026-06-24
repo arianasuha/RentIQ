@@ -172,6 +172,9 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ]
 }
 
 SPECTACULAR_SETTINGS = {
@@ -206,6 +209,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
+    "LEEWAY": timedelta(seconds=10),
     
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     

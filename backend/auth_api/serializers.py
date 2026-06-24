@@ -102,3 +102,4 @@ class UserRetrieveSerializer(serializers.ModelSerializer):
             "email",
         ]
         read_only_fields = fields
+
