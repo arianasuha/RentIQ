@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from django.core.cache import cache
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
@@ -16,12 +17,15 @@ from drf_spectacular.utils import (
 from datetime import timedelta
 from backend.mixins import http_method_mixin
 from backend.schema_serializers import (
+    RefreshRequestSerializer,
+    RefreshResponseSerializer,
     LoginRequestSerializer,
     LoginResponseSerializer,
     ErrorResponseSerializer, 
     UserCreateRequestSerializer,
     UserUpdateRequestSerializer
 )
+from backend.renderers import ViewRenderer
 from .serializers import (
     UserDetailSerializer, 
     UserListSerializer, 
@@ -137,8 +141,68 @@ def check_update_request_data(user_instance, request):
 
     return current_user
 
+
 class RefreshTokenView(APIView):
-    pass
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        request_serializer = RefreshRequestSerializer(data=request.data)
+        if not request_serializer.is_valid():
+            return Response(request_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        raw_refresh_token = request_serializer.validated_data["refresh_token"]
+
+        try:
+            token = RefreshToken(raw_refresh_token)
+            
+            user_id = token.get("user_id") 
+
+            if not user_id:
+                return Response(
+                    {"detail": "Invalid Token."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            target_user = User.objects.get(id=user_id)
+            
+            user_role = get_user_role(target_user)
+            
+            if not target_user.is_active:
+                return Response(
+                    {"detail": "This account is deactivated."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            new_access_token = token.access_token
+            
+            token.rotate() 
+            new_refresh_token = str(token)
+
+            response_data = {
+                "user_id": target_user.id,
+                "user_role": user_role,
+                "access_token": str(new_access_token),
+                "access_token_expiry": timezone.now() + new_access_token.lifetime,
+                "refresh_token": new_refresh_token
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except (TokenError, InvalidToken) as e:
+            return Response(
+                {"detail": "Token is invalid or expired."}, 
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except User.DoesNotExist:
+            return Response(
+                {"detail": "User associated with this token does not exist."}, 
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 @extend_schema(
@@ -268,23 +332,22 @@ class LoginView(APIView):
             failed_attempts = cache.get(cache_key, 0) + 1
             cache.set(cache_key, failed_attempts, timeout=86400)
 
-            if failed_attempts >= 5:
-                if target_user:
+            if target_user:
+                if failed_attempts >= 5:
                     target_user.is_active = False
                     target_user.save() 
-                    cache.delete(cache_key)
-                    
+                        
                     return Response(
                         {"detail": "This account has been deactivated due to too many failed login attempts. Please contact the administrator to reactivate your account."},
                         status=status.HTTP_403_FORBIDDEN
                     )
 
-            if failed_attempts >= 3 and failed_attempts < 5:
-                remaining = 5 - failed_attempts
-                return Response(
-                    {"detail": f"Warning: Invalid credentials. You have {remaining} attempts left before your account is deactivated."},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+                if failed_attempts >= 3 and failed_attempts < 5:
+                    remaining = 5 - failed_attempts
+                    return Response(
+                        {"detail": f"Warning: Invalid credentials. You have {remaining} attempts left before your account is deactivated."},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
 
             return Response(
                 {"detail": "Invalid credentials. Please try again."}, 
