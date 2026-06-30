@@ -336,7 +336,8 @@ class LoginView(APIView):
                 if failed_attempts >= 5:
                     target_user.is_active = False
                     target_user.save() 
-                        
+                    cache.delete(cache_key)
+                    
                     return Response(
                         {"detail": "This account has been deactivated due to too many failed login attempts. Please contact the administrator to reactivate your account."},
                         status=status.HTTP_403_FORBIDDEN
@@ -383,7 +384,7 @@ class LogoutView(APIView):
 
     permission_classes = [AllowAny]
 
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs):  #check token validity
         try:
             refresh_token = request.data.get("refresh_token")
 
